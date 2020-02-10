@@ -29,7 +29,7 @@ namespace Metadata_extractor
             //File.WriteAllText(outputFilePath, jsonString);
 
             var jsonSerializer = new JsonSerializer();
-            jsonSerializer.Converters.Add(new JsonDicomConverter());
+            jsonSerializer.Converters.Add(new JsonDicomConverter(writeTagsAsKeywords: true, skipVr: true));
 
             using (Stream stream = new MemoryStream())
             using (var streamWriter = new StreamWriter(stream, Encoding.UTF8))

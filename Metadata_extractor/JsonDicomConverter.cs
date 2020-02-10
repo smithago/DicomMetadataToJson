@@ -18,6 +18,7 @@ namespace Metadata_extractor
     public class JsonDicomConverter : JsonConverter
     {
         private readonly bool _writeTagsAsKeywords;
+        private readonly bool _skipVr;
         private readonly static Encoding _jsonTextEncoding = Encoding.UTF8;
         private readonly JsonLoadSettings _jsonLoadSettings;
 
@@ -25,14 +26,15 @@ namespace Metadata_extractor
         /// Initialize the JsonDicomConverter.
         /// </summary>
         /// <param name="writeTagsAsKeywords">Whether to write the json keys as DICOM keywords instead of tags. This makes the json non-compliant to DICOM JSON.</param>
-        public JsonDicomConverter(bool writeTagsAsKeywords = false)
-            : this(writeTagsAsKeywords, new JsonLoadSettings())
+        public JsonDicomConverter(bool writeTagsAsKeywords = false, bool skipVr = false)
+            : this(writeTagsAsKeywords, skipVr, new JsonLoadSettings())
         {
         }
 
-        public JsonDicomConverter(bool writeTagsAsKeywords, JsonLoadSettings jsonLoadSettings)
+        public JsonDicomConverter(bool writeTagsAsKeywords, bool skipVr, JsonLoadSettings jsonLoadSettings)
         {
             _writeTagsAsKeywords = writeTagsAsKeywords;
+            _skipVr = skipVr;
             _jsonLoadSettings = jsonLoadSettings;
         }
 
@@ -83,291 +85,19 @@ namespace Metadata_extractor
             writer.WriteEndObject();
         }
 
-        /// <summary>
-        /// Reads the JSON representation of the object.
-        /// </summary>
-        /// <param name="reader">The <see cref="T:Newtonsoft.Json.JsonReader"/> to read from.</param>
-        /// <param name="objectType">Type of the object.</param>
-        /// <param name="existingValue">The existing value of object being read.</param>
-        /// <param name="serializer">The calling serializer.</param>
-        /// <returns>
-        /// The object value.
-        /// </returns>
-        public override object ReadJson(JsonReader reader, Type objectType, object existingValue,
-            JsonSerializer serializer)
-        {
-            var itemObject = JToken.Load(reader, new JsonLoadSettings() { DuplicatePropertyNameHandling = DuplicatePropertyNameHandling.Error });
-            var dataset = ReadJsonDataset(itemObject);
-            return dataset;
-        }
-
-        private DicomDataset ReadJsonDataset(JToken obj)
-        {
-            var dataset = new DicomDataset();
-            if (obj.Type == JTokenType.Null)
-            { return null; }
-            if (!(obj is JObject itemObject))
-            { throw new JsonReaderException("Malformed DICOM json"); }
-
-            foreach (var property in itemObject.Properties())
-            {
-                var tagstr = property.Name;
-                DicomTag tag = ParseTag(tagstr);
-                var item = ReadJsonDicomItem(tag, property.Value);
-                dataset.Add(item);
-            }
-
-            foreach (var item in dataset)
-            {
-                if (item.Tag.IsPrivate && ((item.Tag.Element & 0xff00) != 0))
-                {
-                    var privateCreatorTag = new DicomTag(item.Tag.Group, (ushort)(item.Tag.Element >> 8));
-
-                    if (dataset.Contains(privateCreatorTag))
-                    {
-                        item.Tag.PrivateCreator = new DicomPrivateCreator(dataset.GetSingleValue<string>(privateCreatorTag));
-                    }
-                }
-            }
-
-            return dataset;
-        }
-
-        /// <summary>
-        /// Determines whether this instance can convert the specified object type.
-        /// </summary>
-        /// <param name="objectType">Type of the object.</param>
-        /// <returns>
-        /// <c>true</c> if this instance can convert the specified object type; otherwise, <c>false</c>.
-        /// </returns>
-        public override bool CanConvert(Type objectType)
-        {
-            return typeof(DicomDataset).GetTypeInfo().IsAssignableFrom(objectType.GetTypeInfo());
-        }
         #endregion
 
-        /// <summary>
-        /// Create an instance of a IBulkDataUriByteBuffer. Override this method to use a different IBulkDataUriByteBuffer implementation in applications.
-        /// </summary>
-        /// <param name="bulkDataUri">The URI of a bulk data element as defined in <see cref="!:http://dicom.nema.org/medical/dicom/current/output/chtml/part19/chapter_A.html#table_A.1.5-2">Table A.1.5-2 in PS3.19</see>.</param>
-        /// <returns>An instance of a Bulk URI Byte buffer.</returns>
-        protected virtual IBulkDataUriByteBuffer CreateBulkDataUriByteBuffer(string bulkDataUri)
-        {
-            return new BulkDataUriByteBuffer(bulkDataUri);
-        }
-
-        #region Utilities
-
-        internal static DicomTag ParseTag(string tagstr)
-        {
-            if (Regex.IsMatch(tagstr, @"\A\b[0-9a-fA-F]+\b\Z"))
-            {
-                var group = Convert.ToUInt16(tagstr.Substring(0, 4), 16);
-                var element = Convert.ToUInt16(tagstr.Substring(4), 16);
-                var tag = new DicomTag(group, element);
-                return tag;
-            }
-
-            return DicomDictionary.Default[tagstr];
-        }
-
-        private static DicomItem CreateDicomItem(DicomTag tag, string vr, object data)
-        {
-            DicomItem item;
-            switch (vr)
-            {
-                case "AE":
-                    item = new DicomApplicationEntity(tag, (string[])data);
-                    break;
-                case "AS":
-                    item = new DicomAgeString(tag, (string[])data);
-                    break;
-                case "AT":
-                    item = new DicomAttributeTag(tag, ((string[])data).Select(ParseTag).ToArray());
-                    break;
-                case "CS":
-                    item = new DicomCodeString(tag, (string[])data);
-                    break;
-                case "DA":
-                    item = new DicomDate(tag, (string[])data);
-                    break;
-                case "DS":
-                    if (data is IByteBuffer dataBufferDS)
-                    {
-                        item = new DicomDecimalString(tag, dataBufferDS);
-                    }
-                    else
-                    {
-                        item = new DicomDecimalString(tag, (string[])data);
-                    }
-                    break;
-                case "DT":
-                    item = new DicomDateTime(tag, (string[])data);
-                    break;
-                case "FD":
-                    if (data is IByteBuffer dataBufferFD)
-                    {
-                        item = new DicomFloatingPointDouble(tag, dataBufferFD);
-                    }
-                    else
-                    {
-                        item = new DicomFloatingPointDouble(tag, (double[])data);
-                    }
-                    break;
-                case "FL":
-                    if (data is IByteBuffer dataBufferFL)
-                    {
-                        item = new DicomFloatingPointSingle(tag, dataBufferFL);
-                    }
-                    else
-                    {
-                        item = new DicomFloatingPointSingle(tag, (float[])data);
-                    }
-                    break;
-                case "IS":
-                    if (data is IByteBuffer dataBufferIS)
-                    {
-                        item = new DicomIntegerString(tag, dataBufferIS);
-                    }
-                    else
-                    {
-                        item = new DicomIntegerString(tag, (int[])data);
-                    }
-                    break;
-                case "LO":
-                    item = new DicomLongString(tag, (string[])data);
-                    break;
-                case "LT":
-                    if (data is IByteBuffer dataBufferLT)
-                    {
-                        item = new DicomLongText(tag, _jsonTextEncoding, dataBufferLT);
-                    }
-                    else
-                    {
-                        item = new DicomLongText(tag, _jsonTextEncoding, data.AsStringArray().SingleOrEmpty());
-                    }
-                    break;
-                case "OB":
-                    item = new DicomOtherByte(tag, (IByteBuffer)data);
-                    break;
-                case "OD":
-                    item = new DicomOtherDouble(tag, (IByteBuffer)data);
-                    break;
-                case "OF":
-                    item = new DicomOtherFloat(tag, (IByteBuffer)data);
-                    break;
-                case "OL":
-                    item = new DicomOtherLong(tag, (IByteBuffer)data);
-                    break;
-                case "OW":
-                    item = new DicomOtherWord(tag, (IByteBuffer)data);
-                    break;
-                case "PN":
-                    item = new DicomPersonName(tag, (string[])data);
-                    break;
-                case "SH":
-                    item = new DicomShortString(tag, (string[])data);
-                    break;
-                case "SL":
-                    if (data is IByteBuffer dataBufferSL)
-                    {
-                        item = new DicomSignedLong(tag, dataBufferSL);
-                    }
-                    else
-                    {
-                        item = new DicomSignedLong(tag, (int[])data);
-                    }
-                    break;
-                case "SQ":
-                    item = new DicomSequence(tag, ((DicomDataset[])data));
-                    break;
-                case "SS":
-                    if (data is IByteBuffer dataBufferSS)
-                    {
-                        item = new DicomSignedShort(tag, dataBufferSS);
-                    }
-                    else
-                    {
-                        item = new DicomSignedShort(tag, (short[])data);
-                    }
-                    break;
-                case "ST":
-                    if (data is IByteBuffer dataBufferST)
-                    {
-                        item = new DicomShortText(tag, _jsonTextEncoding, dataBufferST);
-                    }
-                    else
-                    {
-                        item = new DicomShortText(tag, _jsonTextEncoding, data.AsStringArray().FirstOrEmpty());
-                    }
-                    break;
-                case "TM":
-                    item = new DicomTime(tag, (string[])data);
-                    break;
-                case "UC":
-                    if (data is IByteBuffer dataBufferUC)
-                    {
-                        item = new DicomUnlimitedCharacters(tag, _jsonTextEncoding, dataBufferUC);
-                    }
-                    else
-                    {
-                        item = new DicomUnlimitedCharacters(tag, _jsonTextEncoding, data.AsStringArray().SingleOrDefault());
-                    }
-                    break;
-                case "UI":
-                    item = new DicomUniqueIdentifier(tag, (string[])data);
-                    break;
-                case "UL":
-                    if (data is IByteBuffer dataBufferUL)
-                    {
-                        item = new DicomUnsignedLong(tag, dataBufferUL);
-                    }
-                    else
-                    {
-                        item = new DicomUnsignedLong(tag, (uint[])data);
-                    }
-                    break;
-                case "UN":
-                    item = new DicomUnknown(tag, (IByteBuffer)data);
-                    break;
-                case "UR":
-                    item = new DicomUniversalResource(tag, data.AsStringArray().SingleOrEmpty());
-                    break;
-                case "US":
-                    if (data is IByteBuffer dataBufferUS)
-                    {
-                        item = new DicomUnsignedShort(tag, dataBufferUS);
-                    }
-                    else
-                    {
-                        item = new DicomUnsignedShort(tag, (ushort[])data);
-                    }
-                    break;
-                case "UT":
-                    if (data is IByteBuffer dataBufferUT)
-                    {
-                        item = new DicomUnlimitedText(tag, _jsonTextEncoding, dataBufferUT);
-                    }
-                    else
-                    {
-                        item = new DicomUnlimitedText(tag, _jsonTextEncoding, data.AsStringArray().SingleOrEmpty());
-                    }
-                    break;
-                default:
-                    throw new NotSupportedException("Unsupported value representation");
-            }
-            return item;
-        }
-
-        #endregion
 
         #region WriteJson helpers
 
         private void WriteJsonDicomItem(JsonWriter writer, DicomItem item, JsonSerializer serializer)
         {
-            writer.WriteStartObject();
-            writer.WritePropertyName("vr");
-            writer.WriteValue(item.ValueRepresentation.Code);
+            if (!_skipVr)
+            {
+                writer.WriteStartObject();
+                writer.WritePropertyName("vr");
+                writer.WriteValue(item.ValueRepresentation.Code);
+            }
 
             switch (item.ValueRepresentation.Code)
             {
@@ -384,7 +114,6 @@ namespace Metadata_extractor
                 case "OV":
                 case "OW":
                 case "UN":
-                    WriteJsonOther(writer, (DicomElement)item);
                     break;
                 case "FL":
                     WriteJsonElement<float>(writer, (DicomElement)item);
@@ -421,14 +150,21 @@ namespace Metadata_extractor
                     WriteJsonElement<string>(writer, (DicomElement)item);
                     break;
             }
-            writer.WriteEndObject();
+            if (!_skipVr)
+            {
+
+                writer.WriteEndObject();
+            }
         }
 
-        private static void WriteJsonDecimalString(JsonWriter writer, DicomElement elem)
+        private void WriteJsonDecimalString(JsonWriter writer, DicomElement elem)
         {
             if (elem.Count != 0)
             {
-                writer.WritePropertyName("Value");
+                if (!_skipVr)
+                {
+                    writer.WritePropertyName("Value");
+                }
                 writer.WriteStartArray();
                 foreach (var val in elem.Get<string[]>())
                 {
@@ -465,7 +201,7 @@ namespace Metadata_extractor
             }
         }
 
-        private static bool IsValidJsonNumber(string val)
+        private bool IsValidJsonNumber(string val)
         {
             try
             {
@@ -484,7 +220,7 @@ namespace Metadata_extractor
         /// </summary>
         /// <param name="val">A valid DS value</param>
         /// <returns>A json number equivalent to the supplied DS value</returns>
-        private static string FixDecimalString(string val)
+        private string FixDecimalString(string val)
         {
             if (IsValidJsonNumber(val))
             {
@@ -533,11 +269,14 @@ namespace Metadata_extractor
             throw new ArgumentException("Failed converting DS value to json");
         }
 
-        private static void WriteJsonElement<T>(JsonWriter writer, DicomElement elem)
+        private void WriteJsonElement<T>(JsonWriter writer, DicomElement elem)
         {
             if (elem.Count != 0)
             {
-                writer.WritePropertyName("Value");
+                if (!_skipVr)
+                {
+                    writer.WritePropertyName("Value");
+                }
                 writer.WriteStartArray();
                 foreach (var val in elem.Get<T[]>())
                 {
@@ -554,11 +293,14 @@ namespace Metadata_extractor
             }
         }
 
-        private static void WriteJsonAttributeTag(JsonWriter writer, DicomElement elem)
+        private void WriteJsonAttributeTag(JsonWriter writer, DicomElement elem)
         {
             if (elem.Count != 0)
             {
-                writer.WritePropertyName("Value");
+                if (!_skipVr)
+                {
+                    writer.WritePropertyName("Value");
+                }
                 writer.WriteStartArray();
                 foreach (var val in elem.Get<DicomTag[]>())
                 {
@@ -571,25 +313,14 @@ namespace Metadata_extractor
             }
         }
 
-        private static void WriteJsonOther(JsonWriter writer, DicomElement elem)
-        {
-            if (elem.Buffer is IBulkDataUriByteBuffer buffer)
-            {
-                writer.WritePropertyName("BulkDataURI");
-                writer.WriteValue(buffer.BulkDataUri);
-            }
-            else if (elem.Count != 0)
-            {
-                writer.WritePropertyName("InlineBinary");
-                writer.WriteValue(Convert.ToBase64String(elem.Buffer.Data));
-            }
-        }
-
         private void WriteJsonSequence(JsonWriter writer, DicomSequence seq, JsonSerializer serializer)
         {
             if (seq.Items.Count != 0)
             {
-                writer.WritePropertyName("Value");
+                if (!_skipVr)
+                {
+                    writer.WritePropertyName("Value");
+                }
                 writer.WriteStartArray();
 
                 foreach (var child in seq.Items)
@@ -599,11 +330,14 @@ namespace Metadata_extractor
             }
         }
 
-        private static void WriteJsonPersonName(JsonWriter writer, DicomPersonName pn)
+        private void WriteJsonPersonName(JsonWriter writer, DicomPersonName pn)
         {
             if (pn.Count != 0)
             {
-                writer.WritePropertyName("Value");
+                if (!_skipVr)
+                {
+                    writer.WritePropertyName("Value");
+                }
                 writer.WriteStartArray();
 
                 foreach (var val in pn.Get<string[]>())
@@ -626,224 +360,23 @@ namespace Metadata_extractor
         }
 
         #endregion
-
-        #region ReadJson helpers
-
-        private DicomItem ReadJsonDicomItem(DicomTag tag, JToken token)
+        
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
-            var typeProp = token["vr"] ?? throw new JsonReaderException("Malformed DICOM json");
-
-            string vr = typeProp.Value<string>();
-
-            object data;
-
-            switch (vr)
-            {
-                case "OB":
-                case "OD":
-                case "OF":
-                case "OL":
-                case "OW":
-                case "OV":
-                case "UN":
-                    data = ReadJsonOX(token);
-                    break;
-                case "SQ":
-                    data = ReadJsonSequence(token);
-                    break;
-                case "PN":
-                    data = ReadJsonPersonName(token);
-                    break;
-                case "FL":
-                    data = ReadJsonMultiNumber<float>(token);
-                    break;
-                case "FD":
-                    data = ReadJsonMultiNumber<double>(token);
-                    break;
-                case "IS":
-                    data = ReadJsonMultiNumber<int>(token);
-                    break;
-                case "SL":
-                    data = ReadJsonMultiNumber<int>(token);
-                    break;
-                case "SS":
-                    data = ReadJsonMultiNumber<short>(token);
-                    break;
-                case "SV":
-                    data = ReadJsonMultiNumber<long>(token);
-                    break;
-                case "UL":
-                    data = ReadJsonMultiNumber<uint>(token);
-                    break;
-                case "US":
-                    data = ReadJsonMultiNumber<ushort>(token);
-                    break;
-                case "UV":
-                    data = ReadJsonMultiNumber<ulong>(token);
-                    break;
-                case "DS":
-                    data = ReadJsonMultiString(token);
-                    break;
-                default:
-                    data = ReadJsonMultiString(token);
-                    break;
-            }
-
-            DicomItem item = CreateDicomItem(tag, vr, data);
-            return item;
+            throw new NotImplementedException();
         }
 
-        private object ReadJsonMultiString(JToken itemObject)
+        /// <summary>
+        /// Determines whether this instance can convert the specified object type.
+        /// </summary>
+        /// <param name="objectType">Type of the object.</param>
+        /// <returns>
+        /// <c>true</c> if this instance can convert the specified object type; otherwise, <c>false</c>.
+        /// </returns>
+        public override bool CanConvert(Type objectType)
         {
-            if (itemObject["Value"] is JArray items)
-            {
-                return ReadJsonMultiStringValue(items);
-            }
-            else if (itemObject["BulkDataURI"] is JToken bulk)
-            {
-                return ReadJsonBulkDataUri(bulk);
-            }
-            else
-            {
-                return new string[0];
-            }
+            return typeof(DicomDataset).GetTypeInfo().IsAssignableFrom(objectType.GetTypeInfo());
         }
 
-        private static string[] ReadJsonMultiStringValue(JArray items)
-        {
-            var childStrings = new List<string>();
-            foreach (var item in items)
-            {
-                if (item.Type == JTokenType.Null)
-                {
-                    childStrings.Add(null);
-                }
-                else
-                {
-                    childStrings.Add(item.Value<string>());
-                }
-            }
-            var data = childStrings.ToArray();
-            return data;
-        }
-
-        private object ReadJsonMultiNumber<T>(JToken itemObject)
-        {
-            if (itemObject["Value"] is JToken token)
-            {
-                return ReadJsonMultiNumberValue<T>(token);
-            }
-            else if (itemObject["BulkDataURI"] is JToken bulk)
-            {
-                return ReadJsonBulkDataUri(bulk);
-            }
-            else
-            {
-                return new T[0];
-            }
-        }
-
-        private static T[] ReadJsonMultiNumberValue<T>(JToken token)
-        {
-            if (!(token is JArray tokens))
-            { return new T[0]; }
-            var childValues = new List<T>();
-            foreach (var item in tokens)
-            {
-                if (!(item.Type == JTokenType.Float || item.Type == JTokenType.Integer))
-                { throw new JsonReaderException("Malformed DICOM json"); }
-                childValues.Add((T)Convert.ChangeType(item.Value<object>(), typeof(T)));
-            }
-            var data = childValues.ToArray();
-            return data;
-        }
-
-        private string[] ReadJsonPersonName(JToken itemObject)
-        {
-            if (itemObject["Value"] is JArray tokens)
-            {
-                var childStrings = new List<string>();
-                foreach (var item in tokens)
-                {
-                    if (item.Type == JTokenType.Null)
-                    {
-                        childStrings.Add(null);
-                    }
-                    else
-                    {
-                        if (item["Alphabetic"] is JToken alphabetic)
-                        {
-                            if (alphabetic.Type != JTokenType.String)
-                            { throw new JsonReaderException("Malformed DICOM json"); }
-                            childStrings.Add(alphabetic.Value<string>());
-                        }
-                    }
-                }
-                var data = childStrings.ToArray();
-                return data;
-            }
-            else
-            {
-                return new string[0];
-            }
-        }
-
-        private DicomDataset[] ReadJsonSequence(JToken itemObject)
-        {
-            if (itemObject["Value"] is JArray items)
-            {
-                var childItems = new List<DicomDataset>();
-                foreach (var item in items)
-                {
-                    childItems.Add(ReadJsonDataset(item));
-                }
-                var data = childItems.ToArray();
-                return data;
-            }
-            else
-            {
-                return new DicomDataset[0];
-            }
-        }
-
-        private IByteBuffer ReadJsonOX(JToken itemObject)
-        {
-            if (itemObject["InlineBinary"] is JToken inline)
-            {
-                return ReadJsonInlineBinary(inline);
-            }
-            else if (itemObject["BulkDataURI"] is JToken bulk)
-            {
-                return ReadJsonBulkDataUri(bulk);
-            }
-            return EmptyBuffer.Value;
-        }
-
-        private static IByteBuffer ReadJsonInlineBinary(JToken token)
-        {
-            if (token.Type != JTokenType.String)
-            { throw new JsonReaderException("Malformed DICOM json"); }
-            var data = new MemoryByteBuffer(Convert.FromBase64String(token.Value<string>()));
-            return data;
-        }
-
-        private IBulkDataUriByteBuffer ReadJsonBulkDataUri(JToken token)
-        {
-            if (token.Type != JTokenType.String)
-            { throw new JsonReaderException("Malformed DICOM json"); }
-            var data = CreateBulkDataUriByteBuffer(token.Value<string>());
-            return data;
-        }
-
-        #endregion
-    }
-
-    internal static class JsonDicomConverterExtensions
-    {
-        public static string[] AsStringArray(this object data) => (string[])data;
-
-        public static string FirstOrEmpty(this string[] array) => array.Length > 0 ? array[0] : string.Empty;
-
-        public static string SingleOrEmpty(this string[] array) => array.Length > 0 ? array.Single() : string.Empty;
     }
 }
