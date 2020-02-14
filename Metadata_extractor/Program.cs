@@ -1,4 +1,6 @@
 ﻿using Dicom;
+using System;
+using System.Collections.Generic;
 using System.IO;
 
 /// <summary>
@@ -10,29 +12,48 @@ namespace Metadata_extractor
     {
         static void Main(string[] args)
         {
-            var sourceFolder = @"C:\dicomfiles";
-            var destinationFolder = Path.Combine(sourceFolder, "MetadataToJson");
-            Extract(sourceFolder, destinationFolder);
+            var sourceFolder = @"C:\dicomfiles\Output";
+            List<string> dcmFiles = new List<string>();
+            ProcessDirectory(sourceFolder, dcmFiles);
+            var destinationFolder = Path.Combine(@"C:\dicomfiles\", "MetadataToJson2");
+            Directory.CreateDirectory(destinationFolder);
+
+            Extract(dcmFiles, destinationFolder);
         }
 
-        private static void Extract(string pathToDicomFiles, string metadataFolder)
+        public static void ProcessDirectory(string targetDirectory, List<string> dcmFiles)
         {
-            IDicomMetadataExtractor ext = new DicomMetadataExtractorToJson();
-
-            var files = Directory.GetFiles(pathToDicomFiles);
-            Directory.CreateDirectory(metadataFolder);
-
-            foreach (var file in files)
+            // Process the list of files found in the directory.
+            var fileEntries = Directory.GetFiles(targetDirectory);
+            foreach (var file in fileEntries)
             {
-                var filename = Path.GetFileNameWithoutExtension(file);
-
                 var fileExt = Path.GetExtension(file);
                 if (!string.Equals(fileExt, ".dcm", System.StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
+                dcmFiles.Add(file);
+            }
 
-                var outputFile = Path.Combine(metadataFolder, filename + ".json");
+            // Recurse into subdirectories of this directory.
+            string[] subdirectoryEntries = Directory.GetDirectories(targetDirectory);
+            foreach (string subdirectory in subdirectoryEntries)
+            {
+                ProcessDirectory(subdirectory, dcmFiles);
+            }
+        }
+
+        private static void Extract(List<string> dicomFiles, string outputPath)
+        {
+            IDicomMetadataExtractor ext = new DicomMetadataExtractorToJson();
+
+            
+            foreach (var file in dicomFiles)
+            {
+                var filename = Path.GetFileNameWithoutExtension(file);
+
+                var ran = DateTime.Now.ToString("yyyyMMddHHmmssffff");
+                var outputFile = Path.Combine(outputPath, filename + ran + ".json");
                 var dicomFile = DicomFile.Open(file);
 
                 using (FileStream fileStream = File.Create(outputFile))

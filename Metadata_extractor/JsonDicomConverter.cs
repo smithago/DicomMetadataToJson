@@ -18,7 +18,6 @@ namespace Metadata_extractor
     public class JsonDicomConverter : JsonConverter
     {
         private readonly bool _writeTagsAsKeywords;
-        private readonly bool _skipVr;
         private readonly static Encoding _jsonTextEncoding = Encoding.UTF8;
         private readonly JsonLoadSettings _jsonLoadSettings;
 
@@ -26,15 +25,14 @@ namespace Metadata_extractor
         /// Initialize the JsonDicomConverter.
         /// </summary>
         /// <param name="writeTagsAsKeywords">Whether to write the json keys as DICOM keywords instead of tags. This makes the json non-compliant to DICOM JSON.</param>
-        public JsonDicomConverter(bool writeTagsAsKeywords = false, bool skipVr = false)
-            : this(writeTagsAsKeywords, skipVr, new JsonLoadSettings())
+        public JsonDicomConverter(bool writeTagsAsKeywords = false)
+            : this(writeTagsAsKeywords, new JsonLoadSettings())
         {
         }
 
-        public JsonDicomConverter(bool writeTagsAsKeywords, bool skipVr, JsonLoadSettings jsonLoadSettings)
+        public JsonDicomConverter(bool writeTagsAsKeywords, JsonLoadSettings jsonLoadSettings)
         {
             _writeTagsAsKeywords = writeTagsAsKeywords;
-            _skipVr = skipVr;
             _jsonLoadSettings = jsonLoadSettings;
         }
 
@@ -71,7 +69,12 @@ namespace Metadata_extractor
                               ||
                               (item.Tag.DictionaryEntry.MaskTag != null &&
                                item.Tag.DictionaryEntry.MaskTag.Mask != 0xffffffff);
-                if (_writeTagsAsKeywords && !unknown)
+
+                if(unknown)
+                {
+                    continue;
+                }
+                if (_writeTagsAsKeywords)
                 {
                     writer.WritePropertyName(item.Tag.DictionaryEntry.Keyword);
                 }
@@ -88,16 +91,14 @@ namespace Metadata_extractor
         #endregion
 
 
-        #region WriteJson helpers
+    #region WriteJson helpers
 
         private void WriteJsonDicomItem(JsonWriter writer, DicomItem item, JsonSerializer serializer)
         {
-            if (!_skipVr)
-            {
-                writer.WriteStartObject();
-                writer.WritePropertyName("vr");
-                writer.WriteValue(item.ValueRepresentation.Code);
-            }
+            writer.WriteStartObject();
+            writer.WritePropertyName("vr");
+            writer.WriteValue(item.ValueRepresentation.Code);
+            
 
             switch (item.ValueRepresentation.Code)
             {
@@ -150,21 +151,15 @@ namespace Metadata_extractor
                     WriteJsonElement<string>(writer, (DicomElement)item);
                     break;
             }
-            if (!_skipVr)
-            {
-
-                writer.WriteEndObject();
-            }
+            writer.WriteEndObject();
+            
         }
 
         private void WriteJsonDecimalString(JsonWriter writer, DicomElement elem)
         {
             if (elem.Count != 0)
             {
-                if (!_skipVr)
-                {
-                    writer.WritePropertyName("Value");
-                }
+                writer.WritePropertyName("Value");
                 writer.WriteStartArray();
                 foreach (var val in elem.Get<string[]>())
                 {
@@ -273,10 +268,7 @@ namespace Metadata_extractor
         {
             if (elem.Count != 0)
             {
-                if (!_skipVr)
-                {
-                    writer.WritePropertyName("Value");
-                }
+                writer.WritePropertyName("Value");
                 writer.WriteStartArray();
                 foreach (var val in elem.Get<T[]>())
                 {
@@ -297,10 +289,7 @@ namespace Metadata_extractor
         {
             if (elem.Count != 0)
             {
-                if (!_skipVr)
-                {
-                    writer.WritePropertyName("Value");
-                }
+                writer.WritePropertyName("Value");
                 writer.WriteStartArray();
                 foreach (var val in elem.Get<DicomTag[]>())
                 {
@@ -317,10 +306,7 @@ namespace Metadata_extractor
         {
             if (seq.Items.Count != 0)
             {
-                if (!_skipVr)
-                {
-                    writer.WritePropertyName("Value");
-                }
+                writer.WritePropertyName("Value");
                 writer.WriteStartArray();
 
                 foreach (var child in seq.Items)
@@ -334,10 +320,7 @@ namespace Metadata_extractor
         {
             if (pn.Count != 0)
             {
-                if (!_skipVr)
-                {
-                    writer.WritePropertyName("Value");
-                }
+                writer.WritePropertyName("Value");
                 writer.WriteStartArray();
 
                 foreach (var val in pn.Get<string[]>())
